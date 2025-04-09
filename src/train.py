@@ -122,9 +122,10 @@ def main():
     # Train model
     print("Training model...")
     history = full_model.fit(
-        [train_features[10-1:], train_sequences],  # Market and temporal inputs
+        [train_features[10-1:]], # TBN , train_sequences],  # Market and temporal inputs
         train_targets,
-        validation_data=([val_features[10-1:], val_sequences], val_targets),
+        validation_data=([val_features[10-1:]], val_targets),
+        # TBN validation_data=([val_features[10-1:], val_sequences], val_targets),
         epochs=100,
         batch_size=32,
         callbacks=callbacks,

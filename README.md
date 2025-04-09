@@ -75,6 +75,14 @@ This will:
 3. Generate comparison plots between predicted and actual prices
 4. Calculate and display error metrics
 
+#### Result Plot
+
+![Prediction](plots/prediction_results.png)
+
+![TrainingHistory](plots/training_history.png)
+
+![Error](plots/error_distribution.png)
+
 ## Model Architecture
 
 ### Feedforward Neural Network (FNN)
@@ -82,7 +90,7 @@ This will:
 - Multiple dense layers with ReLU activation
 - Batch normalization for training stability
 
-### Recurrent Neural Network (RNN)
+### Recurrent Neural Network (RNN): TBN Not in use for now
 - LSTM layers for temporal dependencies
 - Processes market state evolution
 - Handles time-series aspects of option pricing
@@ -109,5 +117,98 @@ The model is evaluated on:
 
 ## References
 
-- Black-Scholes Option Pricing Model
-- Deep Learning for Option Pricing literature
+
+### Mathematical Foundation
+
+#### Option Pricing Background
+
+The Black-Scholes model is the traditional approach for option pricing, defined by the partial differential equation:
+
+$$\frac{\partial V}{\partial t} + \frac{1}{2}\sigma^2S^2\frac{\partial^2 V}{\partial S^2} + rS\frac{\partial V}{\partial S} - rV = 0$$
+
+Where:
+- $V$ is the option price
+- $S$ is the underlying asset price
+- $t$ is time
+- $r$ is the risk-free interest rate
+- $\sigma$ is the volatility
+
+Our neural network approach generalizes this by learning non-linear relationships without making strong assumptions about market dynamics.
+
+#### The Greeks
+
+The Greeks measure sensitivities of option prices to various factors:
+
+- **Delta (Δ)**: $\frac{\partial V}{\partial S}$ - Sensitivity to underlying price
+- **Gamma (Γ)**: $\frac{\partial^2 V}{\partial S^2}$ - Rate of change of Delta
+- **Theta (Θ)**: $\frac{\partial V}{\partial t}$ - Time decay
+- **Vega**: $\frac{\partial V}{\partial \sigma}$ - Sensitivity to volatility
+
+### Model Architecture
+
+The model employs a hybrid architecture with three main components:
+
+#### 1. Feedforward Neural Network (FNN)
+
+The FNN captures static market features through a series of dense layers:
+
+$$f_{\text{FNN}}(x) = W_L \cdot \sigma(W_{L-1} \cdot ... \sigma(W_1 \cdot x + b_1) ... + b_{L-1}) + b_L$$
+
+Where σ is the ReLU activation function: σ(x) = max(0, x)
+
+#### 2. Recurrent Neural Network (RNN)
+
+The LSTM-based RNN captures temporal dependencies in market data:
+
+$$h_t = \text{LSTM}(x_t, h_{t-1})$$
+
+The LSTM cell computes:
+- $f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)$ - forget gate
+- $i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)$ - input gate
+- $o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)$ - output gate
+- $c'_t = \tanh(W_c \cdot [h_{t-1}, x_t] + b_c)$ - candidate cell state
+- $c_t = f_t \odot c_{t-1} + i_t \odot c'_t$ - cell state update
+- $h_t = o_t \odot \tanh(c_t)$ - hidden state
+
+#### 3. Decoder Network
+
+The decoder maps the latent representation to option prices and Greeks:
+
+$$\begin{aligned}
+\text{Price}, \Delta, \Gamma, \Theta, \text{Vega} = g(\text{Concat}[f_{\text{FNN}}(x_{\text{static}}), f_{\text{RNN}}(x_{\text{temporal}})])
+\end{aligned}$$
+
+### Training Process
+
+The model minimizes a weighted multi-task loss function:
+
+$$L(\theta) = \text{MSE}_{\text{price}} + \lambda_{\Delta}\cdot\text{MSE}_{\text{delta}} + \lambda_{\Gamma}\cdot\text{MSE}_{\text{gamma}} + \lambda_{\Theta}\cdot\text{MSE}_{\text{theta}} + \lambda_{\text{vega}}\cdot\text{MSE}_{\text{vega}}$$
+
+Where the weights balance the importance of accurately predicting each quantity.
+
+### Data Preprocessing
+
+Features are standardized using Z-score normalization:
+
+$$z = \frac{x - \mu}{\sigma}$$
+
+Where μ is the mean and σ is the standard deviation of the training data.
+
+### Advantages Over Traditional Methods
+
+1. **Adaptability**: Learns market patterns without explicit modeling
+2. **Non-linearity**: Captures complex non-linear relationships
+3. **Feature Learning**: Automatically extracts relevant features
+4. **Temporal Awareness**: Incorporates historical data patterns
+5. **Joint Estimation**: Simultaneously predicts price and Greeks with shared representations
+
+
+
+#### Evaluation
+
+The model is evaluated on test data using:
+- Mean Squared Error (MSE): $E[(y - \hat{y})^2]$
+- Mean Absolute Error (MAE): $E[|y - \hat{y}|]$
+- Mean Absolute Percentage Error (MAPE): $E[|\frac{y - \hat{y}}{y}|] \times 100\%$
+- Correlation Coefficient: $\rho_{y,\hat{y}}$
+

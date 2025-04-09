@@ -1,4 +1,4 @@
 data
 checkpoints
 logs
-plots
+__pycache__

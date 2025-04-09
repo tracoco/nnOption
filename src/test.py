@@ -12,7 +12,8 @@ def load_test_data():
 
 def evaluate_model(model, test_features, test_sequences, test_targets):
     """Evaluate model performance."""
-    predictions = model.predict([test_features, test_sequences])
+    predictions = model.predict([test_features])
+    # TBN predictions = model.predict([test_features, test_sequences])
     
     metrics = {}
     target_names = ['price', 'delta', 'gamma', 'theta', 'vega']
