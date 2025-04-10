@@ -29,6 +29,7 @@ class OptionPricingModel:
         """
         inputs = layers.Input(shape=(self.input_dim,))
         
+        # First branch - general features for all outputs
         x = layers.Dense(128, activation='relu', kernel_regularizer=regularizers.l2(0.01))(inputs)
         x = layers.BatchNormalization()(x)
         x = layers.Dropout(0.2)(x)
@@ -40,7 +41,21 @@ class OptionPricingModel:
         x = layers.Dense(128, activation='relu', kernel_regularizer=regularizers.l2(0.01))(x)
         x = layers.BatchNormalization()(x)
         
-        return Model(inputs=inputs, outputs=x, name='fnn')
+        # Second branch - specialized for second derivatives
+        y = layers.Dense(64, activation='elu', kernel_regularizer=regularizers.l2(0.005))(inputs)
+        y = layers.BatchNormalization()(y)
+        
+        y = layers.Dense(128, activation='elu', kernel_regularizer=regularizers.l2(0.005))(y)
+        y = layers.BatchNormalization()(y)
+        y = layers.Dropout(0.1)(y)
+        
+        y = layers.Dense(64, activation='elu', kernel_regularizer=regularizers.l2(0.005))(y)
+        y = layers.BatchNormalization()(y)
+        
+        # Concatenate both branches
+        combined = layers.Concatenate()([x, y])
+        
+        return Model(inputs=inputs, outputs=combined, name='fnn')
     
     def build_rnn(self, sequence_length=10):
         """
@@ -68,7 +83,7 @@ class OptionPricingModel:
     
     def build_decoder(self, latent_dim):
         """
-        Build decoder network.
+        Build decoder network with specialized paths for different Greeks.
         
         Maps latent space to option price and Greeks:
         - Price: Direct prediction of option value
@@ -76,32 +91,59 @@ class OptionPricingModel:
         - Gamma (Γ): ∂²V/∂S² (delta sensitivity to underlying)
         - Theta (Θ): ∂V/∂t (price sensitivity to time)
         - Vega: ∂V/∂σ (price sensitivity to volatility)
+        
+        For gamma calculation, we use specialized neural network layers with ELU activations
+        that handle second-order derivatives better.
         """
         inputs = layers.Input(shape=(latent_dim,))
         
-        x = layers.Dense(128, activation='relu')(inputs)
+        # Shared layers
+        x = layers.Dense(192, activation='relu')(inputs)
         x = layers.BatchNormalization()(x)
         x = layers.Dropout(0.2)(x)
-
-        # TBN: Add more layers if needed, for RNN temp disabled 
-        # x = layers.Dense(64, activation='relu')(x)
-        # x = layers.BatchNormalization()(x)
+        
+        # First-order Greeks path (delta, theta, vega)
+        first_order = layers.Dense(96, activation='relu')(x)
+        first_order = layers.BatchNormalization()(first_order)
+        first_order = layers.Dropout(0.1)(first_order)
+        
+        # Second-order Greek path (gamma)
+        # ELU activation helps with curvature and second derivatives
+        second_order = layers.Dense(96, activation='elu')(x)
+        second_order = layers.BatchNormalization()(second_order)
+        second_order = layers.Dense(64, activation='elu')(second_order)
+        second_order = layers.BatchNormalization()(second_order)
+        second_order = layers.Dense(32, activation='elu')(second_order)
+        
+        # Price output - connected to shared layers
+        price_output = layers.Dense(64, activation='relu')(x)
+        price_output = layers.Dense(1, name='price')(price_output)
+        
+        # First-order Greeks
+        delta_output = layers.Dense(32, activation='tanh')(first_order)
+        delta_output = layers.Dense(1, name='delta')(delta_output)
+        
+        theta_output = layers.Dense(32, activation='tanh')(first_order)
+        theta_output = layers.Dense(1, name='theta')(theta_output)
+        
+        vega_output = layers.Dense(32, activation='tanh')(first_order)
+        vega_output = layers.Dense(1, name='vega')(vega_output)
+        
+        # Second-order Greek (gamma)
+        gamma_output = layers.Dense(1, name='gamma')(second_order)
         
         # Create a dictionary of outputs
-        outputs = {}
-        
-        # Option price output
-        outputs['price'] = layers.Dense(1, name='price')(x)
-        
-        # Greeks outputs
-        outputs['delta'] = layers.Dense(1, name='delta')(x)
-        outputs['gamma'] = layers.Dense(1, name='gamma')(x)
-        outputs['theta'] = layers.Dense(1, name='theta')(x)
-        outputs['vega'] = layers.Dense(1, name='vega')(x)
+        outputs = {
+            'price': price_output,
+            'delta': delta_output,
+            'gamma': gamma_output,
+            'theta': theta_output,
+            'vega': vega_output
+        }
         
         return Model(inputs=inputs, outputs=outputs, name='decoder')
     
-    def build_full_model(self, sequence_length=10):
+    def build_full_model(self, sequence_length=10, gamma_weight=0.3):
         """
         Build complete model architecture.
         
@@ -115,6 +157,9 @@ class OptionPricingModel:
         
         This approach generalizes Black-Scholes by learning non-linear relationships
         and accommodating for market imperfections.
+        
+        Parameters:
+        - gamma_weight: Weight for gamma loss (higher value gives more importance to gamma)
         """
         # Market data inputs
         market_inputs = layers.Input(shape=(self.input_dim,), name='market_inputs')
@@ -137,7 +182,7 @@ class OptionPricingModel:
         combined = layers.Concatenate()([fnn_output]) # TBN , rnn_output])
         
         # Build decoder
-        decoder = self.build_decoder(128)  # 128 from FNN + 32 from RNN
+        decoder = self.build_decoder(192)  # 128+64 from FNN + 32 from RNN
         outputs = decoder(combined)
         
         # Create full model
@@ -147,20 +192,26 @@ class OptionPricingModel:
             name='option_pricing_model'
         )
         
-        # Compile model
+        # Custom loss for gamma to handle small values better
+        def gamma_loss(y_true, y_pred):
+            # Use Huber loss which is less sensitive to outliers
+            huber_loss = tf.keras.losses.Huber(delta=0.1)
+            return huber_loss(y_true, y_pred)
+        
+        # Compile model with custom losses
         model.compile(
             optimizer='adam',
             loss={
                 'price': 'mse',
                 'delta': 'mse',
-                'gamma': 'mse',
+                'gamma': gamma_loss,  # Custom loss for gamma
                 'theta': 'mse',
                 'vega': 'mse'
             },
             loss_weights={
                 'price': 1.0,
                 'delta': 0.5,
-                'gamma': 0.3,
+                'gamma': gamma_weight,  # Adjustable weight for gamma
                 'theta': 0.3,
                 'vega': 0.3
             }
